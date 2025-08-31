@@ -1,0 +1,277 @@
+
+
+// PC - Contador de Programa
+module PC (
+    input clk,
+    input reset,
+    input [7:0] next_addr,
+    input load,
+    output reg [7:0] addr
+);
+    always @(posedge clk or posedge reset) begin
+        if (reset)
+            addr <= 8'b0;
+        else if (load)
+            addr <= next_addr;
+        else
+            addr <= addr + 1;
+    end
+endmodule
+
+// ROM - Memória só leitura (programa)
+module ROM (
+    input [7:0] addr,
+    output reg [15:0] data
+);
+    always @(*) begin
+        case (addr)
+            8'h00: data = 16'b0001_0000_00001010; // LOAD R0, 0x0A
+            8'h01: data = 16'b0001_0001_00001011; // LOAD R1, 0x0B
+            8'h02: data = 16'b0011_0000_00000001; // ADD R0, R1
+            8'h03: data = 16'b0010_0000_00001100; // STORE R0, 0x0C
+            8'h04: data = 16'b0111_0000_00000000; // NOP
+            default: data = 16'b0000_0000_00000000; // NOP
+        endcase
+    end
+endmodule
+
+// Registradores
+module RegFile (
+    input clk,
+    input wr_en,
+    input [1:0] wr_addr,
+    input [7:0] wr_data,
+    input [1:0] rd_addr1,
+    input [1:0] rd_addr2,
+    output reg [7:0] rd_data1,
+    output reg [7:0] rd_data2
+);
+    reg [7:0] regs [3:0]; // 4 registradores de 8 bits
+
+    always @(posedge clk) begin
+        if (wr_en)
+            regs[wr_addr] <= wr_data;
+    end
+
+    always @(*) begin
+        rd_data1 = regs[rd_addr1];
+        rd_data2 = regs[rd_addr2];
+    end
+endmodule
+
+// ALU
+module ALU (
+    input [7:0] op1,
+    input [7:0] op2,
+    input [2:0] alu_ctrl,
+    output reg [7:0] alu_out,
+    output zero
+);
+    always @(*) begin
+        case (alu_ctrl)
+            3'b000: alu_out = op1 + op2; // ADD
+            3'b001: alu_out = op1 - op2; // SUB
+            3'b010: alu_out = op1 & op2; // AND
+            3'b011: alu_out = op1 | op2; // OR
+            default: alu_out = 8'b0;
+        endcase
+    end
+
+    assign zero = (alu_out == 8'b0);
+endmodule
+
+// Controlador - FSM simplificado
+module ControlUnit (
+    input clk,
+    input reset,
+    input [15:0] instr,
+    output reg pc_load,
+    output reg [7:0] pc_next,
+    output reg reg_wr_en,
+    output reg [1:0] reg_wr_addr,
+    output reg [7:0] reg_wr_data,
+    output reg [1:0] reg_rd_addr1,
+    output reg [1:0] reg_rd_addr2,
+    output reg [2:0] alu_ctrl,
+    output reg alu_src,
+    output reg mem_wr,
+    output reg mem_rd
+);
+    reg [2:0] state;
+    reg zero_flag;
+
+    localparam FETCH     = 3'b000,
+               DECODE    = 3'b001,
+               EXECUTE   = 3'b010,
+               MEMORY    = 3'b011,
+               WRITEBACK = 3'b100;
+
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            state <= FETCH;
+            pc_load <= 0;
+            mem_wr <= 0;
+            mem_rd <= 0;
+            reg_wr_en <= 0;
+        end else begin
+            case(state)
+                FETCH: begin
+                    pc_load <= 0;
+                    mem_rd <= 1;
+                    reg_wr_en <= 0;
+                    state <= DECODE;
+                end
+                DECODE: begin
+                    mem_rd <= 0;
+                    state <= EXECUTE;
+                end
+                EXECUTE: begin
+                    case(instr[15:12])
+                        4'b0001: begin // LOAD
+                            reg_wr_en <= 1;
+                            reg_wr_addr <= instr[11:10];
+                            reg_wr_data <= instr[7:0];
+                            state <= WRITEBACK;
+                        end
+                        4'b0011: begin // ADD
+                            alu_ctrl <= 3'b000;
+                            reg_rd_addr1 <= instr[11:10];
+                            reg_rd_addr2 <= instr[9:8];
+                            state <= WRITEBACK;
+                        end
+                        4'b0101: begin // JMP
+                            pc_load <= 1;
+                            pc_next <= instr[7:0];
+                            state <= FETCH;
+                        end
+                        default: state <= FETCH;
+                    endcase
+                end
+                WRITEBACK: begin
+                    reg_wr_en <= 0;
+                    state <= FETCH;
+                end
+            endcase
+        end
+    end
+endmodule
+
+// Modchip fake
+module Modchip (
+    input clk,
+    input reset,
+    input [7:0] addr,
+    input [15:0] rom_instr,
+    input enabled,
+    output reg [15:0] instr_out,
+    output reg pc_force_load,
+    output reg [7:0] pc_force_next
+);
+    always @(*) begin
+        instr_out = rom_instr;
+        pc_force_load = 0;
+        pc_force_next = 8'b0;
+
+        if (enabled) begin
+            // Exemplo: substitui ADD por NOP
+            if (addr == 8'h02)
+                instr_out = 16'b0111_0000_00000000; // NOP
+            // Exemplo: altera LOAD imediato
+            else if (rom_instr[15:12] == 4'b0001 && rom_instr[11:10] == 2'b00)
+                instr_out = {rom_instr[15:8], 8'h55};
+            // Exemplo: forçar salto
+            else if (rom_instr[15:12] == 4'b1110) begin
+                pc_force_load = 1;
+                pc_force_next = 8'h20;
+            end
+        end
+    end
+endmodule
+
+// CPU Top Module com Modchip
+module CPU (
+    input clk,
+    input reset
+);
+    wire [7:0] pc_addr;
+    wire [15:0] rom_instr;
+    wire [15:0] instr_mod;
+    wire mod_enabled = 1'b1;
+
+    // Sinais CPU
+    wire reg_wr_en;
+    wire [1:0] reg_wr_addr;
+    wire [7:0] reg_wr_data;
+    wire [1:0] reg_rd_addr1;
+    wire [1:0] reg_rd_addr2;
+    wire [7:0] reg_rd_data1;
+    wire [7:0] reg_rd_data2;
+    wire [2:0] alu_ctrl;
+    wire alu_src;
+    wire mem_wr;
+    wire mem_rd;
+    wire zero_flag;
+    wire pc_load_signal;
+    wire [7:0] pc_next_signal;
+
+    // Módulos
+    PC pc(
+        .clk(clk),
+        .reset(reset),
+        .next_addr(pc_next_signal),
+        .load(pc_load_signal),
+        .addr(pc_addr)
+    );
+
+    ROM rom(
+        .addr(pc_addr),
+        .data(rom_instr)
+    );
+
+    Modchip mod(
+        .clk(clk),
+        .reset(reset),
+        .addr(pc_addr),
+        .rom_instr(rom_instr),
+        .enabled(mod_enabled),
+        .instr_out(instr_mod),
+        .pc_force_load(pc_load_signal),
+        .pc_force_next(pc_next_signal)
+    );
+
+    RegFile regs(
+        .clk(clk),
+        .wr_en(reg_wr_en),
+        .wr_addr(reg_wr_addr),
+        .wr_data(reg_wr_data),
+        .rd_addr1(reg_rd_addr1),
+        .rd_addr2(reg_rd_addr2),
+        .rd_data1(reg_rd_data1),
+        .rd_data2(reg_rd_data2)
+    );
+
+    ALU alu(
+        .op1(reg_rd_data1),
+        .op2(reg_rd_data2),
+        .alu_ctrl(alu_ctrl),
+        .alu_out(),
+        .zero(zero_flag)
+    );
+
+    ControlUnit control(
+        .clk(clk),
+        .reset(reset),
+        .instr(instr_mod),
+        .pc_load(),
+        .pc_next(),
+        .reg_wr_en(reg_wr_en),
+        .reg_wr_addr(reg_wr_addr),
+        .reg_wr_data(reg_wr_data),
+        .reg_rd_addr1(reg_rd_addr1),
+        .reg_rd_addr2(reg_rd_addr2),
+        .alu_ctrl(alu_ctrl),
+        .alu_src(alu_src),
+        .mem_wr(mem_wr),
+        .mem_rd(mem_rd)
+    );
+endmodule
