@@ -1,0 +1,49 @@
+//teste para gerar os sinais necessários e respostas
+`timescale 1ns/1ps
+
+module tb_modchip_showcase;
+    reg clk;
+    reg reset;
+    reg mod_enabled;
+
+    reg [7:0] pc_reg;
+    reg [7:0] rom_instr;
+
+    wire [7:0] pc_addr;
+    wire [7:0] instr_mod;
+
+    assign pc_addr = pc_reg;
+    assign instr_mod = (mod_enabled) ? pc_reg + 8'h10 : rom_instr;
+
+    // Clock
+    initial clk = 0;
+    always #5 clk = ~clk; // 10ns período
+
+    // Geração do VCD
+    initial begin
+        $dumpfile("dump.vcd");
+        $dumpvars(0, tb_modchip_showcase);
+    end
+
+    initial begin
+        // Inicialização
+        reset = 1;
+        mod_enabled = 0;
+        pc_reg = 8'h00;
+        rom_instr = 8'h00;
+
+        #20;
+        reset = 0;
+
+        // PC contando e modchip atuando
+        repeat (20) begin
+            #10;
+            pc_reg = pc_reg + 1;
+            rom_instr = pc_reg;
+            if (pc_reg == 8'h05) mod_enabled = 1;
+            if (pc_reg == 8'h10) mod_enabled = 0;
+        end
+
+        $finish;
+    end
+endmodule
